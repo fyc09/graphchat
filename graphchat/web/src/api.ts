@@ -26,7 +26,11 @@ export async function initSession(topic: string): Promise<{ session: Session; no
 
 export async function initSessionStream(
   topic: string,
-  onToken: (chunk: string) => void
+  handlers: {
+    onStart?: (payload: { nodes: NodeItem[]; edges: EdgeItem[]; rootNodeId?: string }) => void;
+    onKnowledgeStart?: (payload: { node: NodeItem; edge: EdgeItem | null }) => void;
+    onToken: (chunk: string, nodeId?: string) => void;
+  }
 ): Promise<{ session: Session; nodes: NodeItem[]; edges: EdgeItem[] }> {
   const res = await fetch(`${API_BASE}/api/sessions/init/stream`, {
     method: "POST",
@@ -50,7 +54,20 @@ export async function initSessionStream(
       for (const line of evt.split("\n")) {
         if (!line.startsWith("data: ")) continue;
         const payload = JSON.parse(line.slice(6));
-        if (payload.type === "token") onToken(String(payload.content ?? ""));
+        if (payload.type === "start" && handlers.onStart) {
+          handlers.onStart({
+            nodes: (payload.nodes ?? []) as NodeItem[],
+            edges: (payload.edges ?? []) as EdgeItem[],
+            rootNodeId: payload.root_node_id as string | undefined
+          });
+        }
+        if (payload.type === "knowledge_start" && handlers.onKnowledgeStart && payload.node) {
+          handlers.onKnowledgeStart({
+            node: payload.node as NodeItem,
+            edge: (payload.edge ?? null) as EdgeItem | null
+          });
+        }
+        if (payload.type === "token") handlers.onToken(String(payload.content ?? ""), payload.node_id as string | undefined);
         if (payload.type === "done") result = payload.result;
         if (payload.type === "error") throw new Error(String(payload.message ?? "Stream error"));
       }
@@ -92,7 +109,9 @@ export async function askQuestionStream(
       questionNodeId?: string;
       answerNodeId?: string;
     }) => void;
-    onToken: (chunk: string) => void;
+    onQuestionTitle?: (payload: { nodeId: string; title: string }) => void;
+    onKnowledgeStart?: (payload: { node: NodeItem; edge: EdgeItem | null }) => void;
+    onToken: (chunk: string, nodeId?: string) => void;
   }
 ): Promise<{ new_nodes: NodeItem[]; new_edges: EdgeItem[]; redirect_hint?: string | null }> {
   const res = await fetch(`${API_BASE}/api/sessions/${sessionId}/ask/stream`, {
@@ -125,7 +144,19 @@ export async function askQuestionStream(
             answerNodeId: payload.answer_node_id as string | undefined
           });
         }
-        if (payload.type === "token") handlers.onToken(String(payload.content ?? ""));
+        if (payload.type === "knowledge_start" && handlers.onKnowledgeStart && payload.node) {
+          handlers.onKnowledgeStart({
+            node: payload.node as NodeItem,
+            edge: (payload.edge ?? null) as EdgeItem | null
+          });
+        }
+        if (payload.type === "question_title" && handlers.onQuestionTitle) {
+          handlers.onQuestionTitle({
+            nodeId: String(payload.node_id ?? ""),
+            title: String(payload.title ?? "")
+          });
+        }
+        if (payload.type === "token") handlers.onToken(String(payload.content ?? ""), payload.node_id as string | undefined);
         if (payload.type === "done") result = payload.result;
         if (payload.type === "error") throw new Error(String(payload.message ?? "Stream error"));
       }
@@ -160,27 +191,3 @@ export async function uploadMaterial(sessionId: string, file: File): Promise<voi
   }
 }
 
-export async function generateReview(sessionId: string): Promise<{ summary: string; gaps: string[]; actions: string[] }> {
-  return http(`/api/sessions/${sessionId}/review`, { method: "POST" });
-}
-
-export async function generateQuiz(
-  sessionId: string,
-  count = 3
-): Promise<{ items: { quiz_id: string; question: string; answer: string; related_node_id: string; difficulty: string }[] }> {
-  return http(`/api/sessions/${sessionId}/quiz/generate`, {
-    method: "POST",
-    body: JSON.stringify({ count })
-  });
-}
-
-export async function gradeQuiz(
-  sessionId: string,
-  quizId: string,
-  userAnswer: string
-): Promise<{ correct: boolean; feedback: string; mastery_delta: number }> {
-  return http(`/api/sessions/${sessionId}/quiz/grade`, {
-    method: "POST",
-    body: JSON.stringify({ quiz_id: quizId, user_answer: userAnswer })
-  });
-}

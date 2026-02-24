@@ -14,29 +14,9 @@
         <label>Upload Reference (txt/md)</label>
         <input type="file" @change="onFileChange" />
       </div>
-      <div class="section">
-        <button :disabled="!sessionId || isLoading" @click="onReview">Review</button>
-        <button :disabled="!sessionId || isLoading" @click="onGenerateQuiz">Quiz</button>
-      </div>
-      <div v-if="review" class="section result">
-        <h3>Review</h3>
-        <p>{{ review.summary }}</p>
-      </div>
-      <div v-if="edgeQuestion" class="section result">
-        <h3>Edge Question</h3>
-        <p>{{ edgeQuestion }}</p>
-      </div>
       <div v-if="redirectHint" class="section result">
         <h3>Redirect</h3>
         <p>{{ redirectHint }}</p>
-      </div>
-      <div v-if="quizItems.length > 0" class="section result">
-        <h3>Quiz</h3>
-        <div v-for="q in quizItems" :key="q.quiz_id" class="quiz-item">
-          <p>{{ q.question }}</p>
-          <input v-model="quizAnswerMap[q.quiz_id]" placeholder="Your answer" />
-          <button @click="onGrade(q.quiz_id)">Grade</button>
-        </div>
       </div>
       <div v-if="errorText" class="section error">{{ errorText }}</div>
     </aside>
@@ -54,7 +34,6 @@
         @toggle-section="toggleSection"
         @move-end="onMoveEnd"
         @resize-end="onResizeEnd"
-        @edge-click="onEdgeClick"
         @clear-select="clearSelections"
         @canvas-dblclick="onCanvasDblClick"
         @draft-change="onDraftChange"
@@ -74,10 +53,7 @@ import { onMounted, reactive, ref } from "vue";
 import GraphCanvas from "./components/GraphCanvas.vue";
 import {
   askQuestionStream,
-  generateQuiz,
-  generateReview,
   getGraph,
-  gradeQuiz,
   initSessionStream,
   listSessions,
   updateNodePosition,
@@ -95,15 +71,9 @@ const selectedSections = ref<SelectedSection[]>([]);
 const selectedSectionKeys = ref<string[]>([]);
 const draftQuestion = ref<DraftQuestion | null>(null);
 const initNodePosition = ref<{ x: number; y: number }>({ x: 0, y: 0 });
-const edgeQuestion = ref("");
 const redirectHint = ref("");
 const errorText = ref("");
 const isLoading = ref(false);
-const review = ref<{ summary: string; gaps: string[]; actions: string[] } | null>(null);
-const quizItems = ref<{ quiz_id: string; question: string; answer: string; related_node_id: string; difficulty: string }[]>(
-  []
-);
-const quizAnswerMap = reactive<Record<string, string>>({});
 const graph = reactive<{ nodes: NodeItem[]; edges: EdgeItem[] }>({ nodes: [], edges: [] });
 
 onMounted(async () => {
@@ -153,28 +123,60 @@ async function onInitSession(): Promise<void> {
     isLoading.value = true;
     errorText.value = "";
     const topic = initTopic.value.trim();
-    const tempId = `temp-init-${Date.now()}`;
-    const tempNode: NodeItem = {
-      id: tempId,
-      session_id: "",
-      title: topic,
-      content: "",
-      mastery: 0.2,
-      importance: 1.0,
-      x: initNodePosition.value.x,
-      y: initNodePosition.value.y,
-      width: 320,
-      node_type: "core",
-      created_at: new Date().toISOString()
-    };
-    graph.nodes = [tempNode];
-    const data = await initSessionStream(topic, (chunk) => {
-      const n = graph.nodes.find((it) => it.id === tempId);
-      if (n) n.content += chunk;
+    let liveRootNodeId = "";
+    let knowledgeSpawnIndex = 0;
+    const data = await initSessionStream(topic, {
+      onStart: ({ nodes, edges, rootNodeId }) => {
+        const cloned = nodes.map((n) => ({ ...n }));
+        const rootNode = cloned.find((n) => n.id === rootNodeId) ?? cloned[0];
+        if (rootNode) {
+          rootNode.x = initNodePosition.value.x;
+          rootNode.y = initNodePosition.value.y;
+          liveRootNodeId = rootNode.id;
+        }
+        graph.nodes = cloned;
+        graph.edges = [...edges];
+      },
+      onKnowledgeStart: ({ node, edge }) => {
+        const rootNode = liveRootNodeId ? graph.nodes.find((n) => n.id === liveRootNodeId) : null;
+        const placedNode = { ...node };
+        if (rootNode) {
+          placedNode.x = rootNode.x + (rootNode.width || 400) + 180 + knowledgeSpawnIndex * 22;
+          placedNode.y = rootNode.y + knowledgeSpawnIndex * 220;
+        }
+        knowledgeSpawnIndex += 1;
+        if (!graph.nodes.some((n) => n.id === node.id)) {
+          graph.nodes = [...graph.nodes, placedNode];
+        }
+        if (edge && !graph.edges.some((e) => e.id === edge.id)) {
+          graph.edges = [...graph.edges, edge];
+        }
+      },
+      onToken: (chunk, nodeId) => {
+        const targetId = nodeId || liveRootNodeId;
+        if (!targetId) return;
+        const n = graph.nodes.find((it) => it.id === targetId);
+        if (n) n.content += chunk;
+      }
     });
     sessionId.value = data.session.id;
-    graph.nodes = data.nodes;
-    graph.edges = data.edges;
+    if (data.nodes.length > 0) {
+      for (const node of data.nodes) {
+        const idx = graph.nodes.findIndex((n) => n.id === node.id);
+        if (idx < 0) {
+          graph.nodes = [...graph.nodes, node];
+          await updateNodePosition(sessionId.value, node.id, node.x, node.y, node.width);
+        } else {
+          const prev = graph.nodes[idx];
+          const next = { ...node, x: prev.x, y: prev.y, width: prev.width };
+          graph.nodes[idx] = next;
+          await updateNodePosition(sessionId.value, next.id, next.x, next.y, next.width);
+        }
+      }
+      const edgeIds = new Set(graph.edges.map((e) => e.id));
+      const edgesToAdd = data.edges.filter((e) => !edgeIds.has(e.id));
+      if (edgesToAdd.length > 0) graph.edges = [...graph.edges, ...edgesToAdd];
+    }
     clearSelections();
     initTopic.value = "";
     await refreshSessions();
@@ -227,6 +229,8 @@ async function onDraftSubmit(): Promise<void> {
     draftQuestion.value = null;
     clearSelections();
     let liveNodeId = "";
+    let liveQuestionNodeId = "";
+    let knowledgeSpawnIndex = 0;
 
     const data = await askQuestionStream(
       sessionId.value,
@@ -241,9 +245,10 @@ async function onDraftSubmit(): Promise<void> {
           if (qNode) {
             qNode.x = q.x;
             qNode.y = q.y;
+            liveQuestionNodeId = qNode.id;
           }
           if (aNode) {
-            aNode.x = q.x + (qNode?.width ?? 242) + 180;
+            aNode.x = q.x + (qNode?.width ?? 400) + 180;
             aNode.y = q.y;
             liveNodeId = aNode.id;
           }
@@ -254,9 +259,37 @@ async function onDraftSubmit(): Promise<void> {
             if (aNode) void updateNodePosition(sessionId.value, aNode.id, aNode.x, aNode.y, aNode.width);
           }
         },
-        onToken: (chunk) => {
-          if (!liveNodeId) return;
-          const n = graph.nodes.find((it) => it.id === liveNodeId);
+        onKnowledgeStart: ({ node, edge }) => {
+          const answerNode = liveNodeId ? graph.nodes.find((n) => n.id === liveNodeId) : null;
+          const questionNode = liveQuestionNodeId ? graph.nodes.find((n) => n.id === liveQuestionNodeId) : null;
+          const placedNode = { ...node };
+          if (answerNode) {
+            placedNode.x = answerNode.x + knowledgeSpawnIndex * 22;
+            placedNode.y = answerNode.y + 240 + knowledgeSpawnIndex * 220;
+          } else if (questionNode) {
+            placedNode.x = questionNode.x + (questionNode.width || 400) + 180 + knowledgeSpawnIndex * 22;
+            placedNode.y = questionNode.y + 240 + knowledgeSpawnIndex * 220;
+          }
+          knowledgeSpawnIndex += 1;
+          if (!graph.nodes.some((n) => n.id === node.id)) {
+            graph.nodes = [...graph.nodes, placedNode];
+            if (sessionId.value) {
+              void updateNodePosition(sessionId.value, placedNode.id, placedNode.x, placedNode.y, placedNode.width);
+            }
+          }
+          if (edge && !graph.edges.some((e) => e.id === edge.id)) {
+            graph.edges = [...graph.edges, edge];
+          }
+        },
+        onQuestionTitle: ({ nodeId, title }) => {
+          if (!nodeId || !title) return;
+          const n = graph.nodes.find((it) => it.id === nodeId);
+          if (n) n.title = title;
+        },
+        onToken: (chunk, nodeId) => {
+          const targetId = nodeId || liveNodeId;
+          if (!targetId) return;
+          const n = graph.nodes.find((it) => it.id === targetId);
           if (n) n.content += chunk;
         }
       }
@@ -264,12 +297,19 @@ async function onDraftSubmit(): Promise<void> {
     if (data.new_nodes.length > 0) {
       for (const node of data.new_nodes) {
         const idx = graph.nodes.findIndex((n) => n.id === node.id);
-        if (idx < 0) continue;
-        const prev = graph.nodes[idx];
-        const next = { ...node, x: prev.x, y: prev.y, width: prev.width };
-        graph.nodes[idx] = next;
-        await updateNodePosition(sessionId.value, next.id, next.x, next.y, next.width);
+        if (idx < 0) {
+          graph.nodes = [...graph.nodes, node];
+          await updateNodePosition(sessionId.value, node.id, node.x, node.y, node.width);
+        } else {
+          const prev = graph.nodes[idx];
+          const next = { ...node, x: prev.x, y: prev.y, width: prev.width };
+          graph.nodes[idx] = next;
+          await updateNodePosition(sessionId.value, next.id, next.x, next.y, next.width);
+        }
       }
+      const edgeIds = new Set(graph.edges.map((e) => e.id));
+      const edgesToAdd = data.new_edges.filter((e) => !edgeIds.has(e.id));
+      if (edgesToAdd.length > 0) graph.edges = [...graph.edges, ...edgesToAdd];
       redirectHint.value = data.redirect_hint ?? "";
     }
   } catch (err) {
@@ -327,10 +367,6 @@ async function onResizeEnd(payload: { nodeId: string; width: number }): Promise<
   }
 }
 
-function onEdgeClick(questionText: string): void {
-  edgeQuestion.value = questionText;
-}
-
 async function onFileChange(event: Event): Promise<void> {
   if (!sessionId.value) return;
   const target = event.target as HTMLInputElement;
@@ -346,38 +382,4 @@ async function onFileChange(event: Event): Promise<void> {
   }
 }
 
-async function onReview(): Promise<void> {
-  if (!sessionId.value) return;
-  try {
-    errorText.value = "";
-    review.value = await generateReview(sessionId.value);
-  } catch (err) {
-    errorText.value = String(err);
-  }
-}
-
-async function onGenerateQuiz(): Promise<void> {
-  if (!sessionId.value) return;
-  try {
-    errorText.value = "";
-    const data = await generateQuiz(sessionId.value, 3);
-    quizItems.value = data.items;
-    for (const item of data.items) quizAnswerMap[item.quiz_id] = "";
-  } catch (err) {
-    errorText.value = String(err);
-  }
-}
-
-async function onGrade(quizId: string): Promise<void> {
-  if (!sessionId.value) return;
-  try {
-    errorText.value = "";
-    await gradeQuiz(sessionId.value, quizId, quizAnswerMap[quizId] || "");
-    const latest = await getGraph(sessionId.value);
-    graph.nodes = latest.nodes;
-    graph.edges = latest.edges;
-  } catch (err) {
-    errorText.value = String(err);
-  }
-}
 </script>

@@ -1,5 +1,5 @@
-export type NodeType = "core" | "normal" | "counterexample" | "skeleton" | "question";
-export type EdgeType = "normal" | "bridge" | "counter" | "redirect";
+export type NodeType = "core" | "normal" | "counterexample" | "skeleton" | "question" | "answer" | "knowledge";
+export type EdgeType = "direct";
 
 export interface Session {
   id: string;
@@ -19,8 +19,6 @@ export interface NodeItem {
   session_id: string;
   title: string;
   content: string;
-  mastery: number;
-  importance: number;
   x: number;
   y: number;
   width: number;
@@ -33,9 +31,7 @@ export interface EdgeItem {
   session_id: string;
   source_node_id: string;
   target_node_id: string;
-  question: string;
   source_section_key?: string | null;
-  strength: number;
   edge_type: EdgeType;
   created_at: string;
 }

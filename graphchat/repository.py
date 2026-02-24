@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from typing import Any
 
-from .models import Edge, Node, QuizItem, SessionOut
+from .models import Edge, Node, SessionOut
 
 
 def _now_iso() -> str:
@@ -42,7 +40,7 @@ class Repository:
         for r in rows:
             data = dict(r)
             if data.get("width") is None or float(data.get("width", 0) or 0) <= 0:
-                data["width"] = 260.0
+                data["width"] = 400.0
             out.append(Node(**data))
         return out
 
@@ -57,8 +55,6 @@ class Repository:
         session_id: str,
         title: str,
         content: str,
-        mastery: float,
-        importance: float,
         x: float,
         y: float,
         width: float,
@@ -66,21 +62,29 @@ class Repository:
     ) -> Node:
         nid = str(uuid.uuid4())
         created_at = _now_iso()
-        self.conn.execute(
-            """
-            INSERT INTO nodes(id, session_id, title, content, mastery, importance, x, y, width, node_type, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (nid, session_id, title, content, mastery, importance, x, y, width, node_type, created_at),
-        )
+        try:
+            self.conn.execute(
+                """
+                INSERT INTO nodes(id, session_id, title, content, x, y, width, node_type, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (nid, session_id, title, content, x, y, width, node_type, created_at),
+            )
+        except sqlite3.Error:
+            # Backward compatibility for older DB schema that still requires mastery/importance.
+            self.conn.execute(
+                """
+                INSERT INTO nodes(id, session_id, title, content, mastery, importance, x, y, width, node_type, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (nid, session_id, title, content, 0.0, 0.0, x, y, width, node_type, created_at),
+            )
         self.conn.commit()
         return Node(
             id=nid,
             session_id=session_id,
             title=title,
             content=content,
-            mastery=mastery,
-            importance=importance,
             x=x,
             y=y,
             width=width,
@@ -93,29 +97,45 @@ class Repository:
         session_id: str,
         source_node_id: str,
         target_node_id: str,
-        question: str,
         source_section_key: str | None,
-        strength: float,
         edge_type: str,
     ) -> Edge:
         eid = str(uuid.uuid4())
         created_at = _now_iso()
-        self.conn.execute(
-            """
-            INSERT INTO edges(id, session_id, source_node_id, target_node_id, question, source_section_key, strength, edge_type, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (eid, session_id, source_node_id, target_node_id, question, source_section_key, strength, edge_type, created_at),
-        )
+        try:
+            self.conn.execute(
+                """
+                INSERT INTO edges(id, session_id, source_node_id, target_node_id, source_section_key, edge_type, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (eid, session_id, source_node_id, target_node_id, source_section_key, edge_type, created_at),
+            )
+        except sqlite3.Error:
+            # Backward compatibility for older DB schema that still requires question/strength.
+            self.conn.execute(
+                """
+                INSERT INTO edges(id, session_id, source_node_id, target_node_id, question, source_section_key, strength, edge_type, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    eid,
+                    session_id,
+                    source_node_id,
+                    target_node_id,
+                    "",
+                    source_section_key,
+                    1.0,
+                    edge_type,
+                    created_at,
+                ),
+            )
         self.conn.commit()
         return Edge(
             id=eid,
             session_id=session_id,
             source_node_id=source_node_id,
             target_node_id=target_node_id,
-            question=question,
             source_section_key=source_section_key,
-            strength=strength,
             edge_type=edge_type,  # type: ignore[arg-type]
             created_at=created_at,
         )
@@ -132,7 +152,7 @@ class Repository:
         for r in rows:
             data = dict(r)
             if data.get("width") is None or float(data.get("width", 0) or 0) <= 0:
-                data["width"] = 260.0
+                data["width"] = 400.0
             out.append(Node(**data))
         return out
 
@@ -147,13 +167,6 @@ class Repository:
                 "UPDATE nodes SET x = ?, y = ?, width = ? WHERE session_id = ? AND id = ?",
                 (x, y, width, session_id, node_id),
             )
-        self.conn.commit()
-
-    def update_node_mastery(self, session_id: str, node_id: str, mastery: float) -> None:
-        self.conn.execute(
-            "UPDATE nodes SET mastery = ? WHERE session_id = ? AND id = ?",
-            (mastery, session_id, node_id),
-        )
         self.conn.commit()
 
     def update_node_content(self, session_id: str, node_id: str, title: str, content: str) -> None:
@@ -183,42 +196,3 @@ class Repository:
             pieces.append(f"[{r['filename']}]\n{r['content_text']}")
         ctx = "\n\n".join(pieces)
         return ctx[:max_chars]
-
-    def save_review(self, session_id: str, summary: str, gaps: list[str], actions: list[str]) -> None:
-        rid = str(uuid.uuid4())
-        created_at = _now_iso()
-        self.conn.execute(
-            "INSERT INTO reviews(id, session_id, summary, gaps_json, actions_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (rid, session_id, summary, json.dumps(gaps), json.dumps(actions), created_at),
-        )
-        self.conn.commit()
-
-    def create_quiz_item(
-        self,
-        session_id: str,
-        question: str,
-        answer: str,
-        related_node_id: str,
-        difficulty: str,
-    ) -> QuizItem:
-        qid = str(uuid.uuid4())
-        created_at = _now_iso()
-        self.conn.execute(
-            "INSERT INTO quizzes(id, session_id, question, answer, related_node_id, difficulty, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (qid, session_id, question, answer, related_node_id, difficulty, created_at),
-        )
-        self.conn.commit()
-        return QuizItem(
-            quiz_id=qid,
-            question=question,
-            answer=answer,
-            related_node_id=related_node_id,
-            difficulty=difficulty,
-        )
-
-    def get_quiz_item(self, session_id: str, quiz_id: str) -> dict[str, Any] | None:
-        row = self.conn.execute(
-            "SELECT * FROM quizzes WHERE session_id = ? AND id = ?",
-            (session_id, quiz_id),
-        ).fetchone()
-        return dict(row) if row else None

@@ -4,8 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-NodeType = Literal["core", "normal", "counterexample", "skeleton", "question"]
-EdgeType = Literal["normal", "bridge", "counter", "redirect"]
+NodeType = Literal["core", "normal", "counterexample", "skeleton", "question", "answer", "knowledge"]
+EdgeType = Literal["direct"]
 
 
 class SessionOut(BaseModel):
@@ -19,11 +19,9 @@ class Node(BaseModel):
     session_id: str
     title: str
     content: str
-    mastery: float = Field(ge=0.0, le=1.0)
-    importance: float = Field(ge=0.0, le=1.0)
     x: float
     y: float
-    width: float = Field(gt=80.0, le=1200.0, default=260.0)
+    width: float = Field(gt=80.0, le=1200.0, default=400.0)
     node_type: NodeType
     created_at: str
 
@@ -33,9 +31,7 @@ class Edge(BaseModel):
     session_id: str
     source_node_id: str
     target_node_id: str
-    question: str
     source_section_key: str | None = None
-    strength: float = Field(ge=0.0, le=1.0)
     edge_type: EdgeType
     created_at: str
 
@@ -81,38 +77,3 @@ class UpdatePositionIn(BaseModel):
     width: float | None = Field(default=None, gt=80.0, le=1200.0)
 
 
-class UpdateMasteryIn(BaseModel):
-    mastery: float = Field(ge=0.0, le=1.0)
-
-
-class ReviewOut(BaseModel):
-    summary: str
-    gaps: list[str]
-    actions: list[str]
-
-
-class QuizGenerateIn(BaseModel):
-    count: int = Field(default=3, ge=1, le=10)
-
-
-class QuizItem(BaseModel):
-    quiz_id: str
-    question: str
-    answer: str
-    related_node_id: str
-    difficulty: str
-
-
-class QuizGenerateOut(BaseModel):
-    items: list[QuizItem]
-
-
-class QuizGradeIn(BaseModel):
-    quiz_id: str
-    user_answer: str = Field(min_length=1, max_length=1200)
-
-
-class QuizGradeOut(BaseModel):
-    correct: bool
-    feedback: str
-    mastery_delta: float

@@ -156,6 +156,26 @@ button:disabled {
   border-bottom-color: #6d3905;
 }
 
+.node-answer {
+  border-color: #1f4fb5;
+  background: #eef4ff;
+}
+
+.node-answer .title-row {
+  background: #1f4fb5;
+  border-bottom-color: #153a84;
+}
+
+.node-knowledge {
+  border-color: #355c1e;
+  background: #edf8e7;
+}
+
+.node-knowledge .title-row {
+  background: #466f2a;
+  border-bottom-color: #34531f;
+}
+
 .node-skeleton {
   border-style: dashed;
 }
@@ -166,6 +186,9 @@ button:disabled {
 }
 
 .title-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   margin: -8px -8px 6px -8px;
   padding: 6px 8px;
   background: #35555a;
@@ -177,6 +200,35 @@ button:disabled {
 
 .title-row-solid {
   cursor: grab;
+}
+
+.title-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.node-collapse-btn {
+  border: none;
+  background: transparent;
+  color: #e4efef;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.node-collapse-btn svg {
+  transform: rotate(90deg);
+  transition: transform 0.2s ease;
+}
+
+.node-collapse-btn svg.collapsed {
+  transform: rotate(0deg);
 }
 
 .check-inline {
@@ -233,6 +285,34 @@ button:disabled {
   padding: 0;
 }
 
+.summary-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+  color: #35555a;
+  transition: transform 0.22s ease;
+  transform-origin: 50% 50%;
+}
+
+.content details[open] > summary .summary-chevron {
+  transform: rotate(90deg);
+}
+
+.section-panel {
+  display: block;
+  opacity: 1;
+}
+
+.content details[open] .section-panel {
+  opacity: 1;
+}
+
+.section-panel-inner {
+  overflow: visible;
+}
+
 .section-title.section-selected {
   color: #1f4fb5;
   text-decoration: underline;
@@ -243,6 +323,20 @@ button:disabled {
 
 .section-body {
   margin-top: 4px;
+}
+
+.node-collapsed .resize-edge {
+  display: none;
+}
+
+.node.node-collapsed {
+  padding-bottom: 0;
+}
+
+.node.node-collapsed .title-row {
+  margin-bottom: -8px;
+  border-bottom: none;
+  border-radius: 10px;
 }
 
 .markdown-body :first-child {
@@ -291,12 +385,6 @@ button:disabled {
   background: #fff1f1;
   border-radius: 8px;
   padding: 8px;
-}
-
-.quiz-item {
-  border-top: 1px solid #cad5d6;
-  padding-top: 8px;
-  margin-top: 8px;
 }
 
 @media (max-width: 960px) {

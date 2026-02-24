@@ -16,11 +16,9 @@ CREATE TABLE IF NOT EXISTS nodes (
   session_id TEXT NOT NULL,
   title TEXT NOT NULL,
   content TEXT NOT NULL,
-  mastery REAL NOT NULL,
-  importance REAL NOT NULL,
   x REAL NOT NULL,
   y REAL NOT NULL,
-  width REAL NOT NULL DEFAULT 260,
+  width REAL NOT NULL DEFAULT 400,
   node_type TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -30,9 +28,7 @@ CREATE TABLE IF NOT EXISTS edges (
   session_id TEXT NOT NULL,
   source_node_id TEXT NOT NULL,
   target_node_id TEXT NOT NULL,
-  question TEXT NOT NULL,
   source_section_key TEXT,
-  strength REAL NOT NULL,
   edge_type TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -46,24 +42,6 @@ CREATE TABLE IF NOT EXISTS materials (
   created_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS reviews (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  summary TEXT NOT NULL,
-  gaps_json TEXT NOT NULL,
-  actions_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS quizzes (
-  id TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL,
-  question TEXT NOT NULL,
-  answer TEXT NOT NULL,
-  related_node_id TEXT NOT NULL,
-  difficulty TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
 """
 
 
@@ -88,7 +66,7 @@ def init_db(db_path: str) -> None:
             conn.execute("ALTER TABLE nodes ADD COLUMN width REAL")
         except sqlite3.OperationalError:
             pass
-        conn.execute("UPDATE nodes SET width = 260 WHERE width IS NULL OR width <= 0")
+        conn.execute("UPDATE nodes SET width = 400 WHERE width IS NULL OR width <= 0")
         conn.commit()
     finally:
         conn.close()
