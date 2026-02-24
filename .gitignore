@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+
+graphchat/data/
+config.json
+
+graphchat/web/node_modules/
+graphchat/static/
+*.db
+*.egg-info/
