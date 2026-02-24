@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -52,11 +53,17 @@ def ensure_config(cwd: Path | None = None) -> Path:
     example_path = root / "config.example.json"
     if cfg_path.exists():
         return cfg_path
-    if not example_path.exists():
+    if example_path.exists():
+        shutil.copyfile(example_path, cfg_path)
+        return cfg_path
+    try:
+        packaged = resources.files("graphchat").joinpath("config.example.json")
+        cfg_path.write_text(packaged.read_text(encoding="utf-8"), encoding="utf-8")
+    except Exception as exc:
         raise FileNotFoundError(
-            "Missing config.json and config.example.json in current working directory."
-        )
-    shutil.copyfile(example_path, cfg_path)
+            "Missing config.json and config.example.json in current working directory, "
+            "and packaged config.example.json is unavailable."
+        ) from exc
     return cfg_path
 
 

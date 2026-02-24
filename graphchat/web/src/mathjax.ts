@@ -1,18 +1,35 @@
-declare global {
-  interface Window {
-    MathJax?: {
-      typesetPromise?: (elements?: Element[]) => Promise<void>;
-      typesetClear?: (elements?: Element[]) => void;
+type MathJaxRuntime = {
+  typesetPromise?: (elements?: Element[]) => Promise<void>;
+  typesetClear?: (elements?: Element[]) => void;
+  startup?: {
+    defaultReady?: () => void;
+    document?: {
+      options?: Record<string, unknown>;
     };
-  }
-}
+  };
+};
 
 let loading: Promise<void> | null = null;
+let runtime: MathJaxRuntime | null = null;
 
 export async function ensureMathJax(): Promise<void> {
-  if (window.MathJax?.typesetPromise) return;
+  if (runtime?.typesetPromise) return;
+  const globalObj = globalThis as typeof globalThis & { MathJax?: MathJaxRuntime | unknown };
   if (!loading) {
-    (window as Window & { MathJax: unknown }).MathJax = {
+    try {
+      const toDelete: string[] = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith("MathJax")) toDelete.push(key);
+      }
+      for (const key of toDelete) localStorage.removeItem(key);
+    } catch {
+      // ignore
+    }
+    globalObj.MathJax = {
+      loader: {
+        load: ["input/tex", "output/svg"]
+      },
       tex: {
         inlineMath: [
           ["$", "$"],
@@ -25,34 +42,50 @@ export async function ensureMathJax(): Promise<void> {
         processEscapes: true
       },
       options: {
-        skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"],
-        enableAssistiveMml: false,
-        enableExplorer: false,
-        enableSpeech: false,
-        enableBraille: false,
-        a11y: {
-          speech: false,
-          braille: false
-        },
-        menuOptions: {
-          settings: {
-            assistiveMml: false,
-            explorer: false,
-            speech: false,
-            braille: false
-          }
-        },
-        worker: {
-          path: "",
-          pool: "",
-          worker: ""
-        }
+        skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"]
       },
       startup: {
-        typeset: false
+        typeset: false,
+        ready: () => {
+          const mj = globalObj.MathJax as MathJaxRuntime & {
+            startup?: {
+              defaultReady?: () => void;
+              document?: { options?: Record<string, unknown> };
+            };
+          };
+          mj.startup?.defaultReady?.();
+          const doc = mj.startup?.document;
+          if (doc?.options) {
+            const renderActions = (doc.options.renderActions ?? {}) as Record<string, unknown>;
+            delete renderActions.addMenu;
+            delete renderActions.checkLoading;
+            delete renderActions.attachSpeech;
+            delete renderActions.enrich;
+            delete renderActions.complexity;
+            delete renderActions.explorable;
+            doc.options.renderActions = renderActions;
+          }
+        }
       }
     };
-    loading = import("mathjax/es5/tex-chtml.js").then(() => undefined);
+    loading = (async () => {
+      try {
+        await import("mathjax-full/es5/tex-svg.js");
+      } catch (err) {
+        // Vite dev prebundle may serve a stale/missing dep URL after dependency switches.
+        await import(/* @vite-ignore */ "/node_modules/mathjax-full/es5/tex-svg.js");
+      }
+      return undefined;
+    })();
   }
   await loading;
+  runtime = (globalObj.MathJax as MathJaxRuntime) ?? null;
+}
+
+export async function typesetMathInElements(elements: Element[]): Promise<void> {
+  if (elements.length === 0) return;
+  await ensureMathJax();
+  if (!runtime?.typesetPromise) return;
+  runtime.typesetClear?.(elements);
+  await runtime.typesetPromise(elements);
 }

@@ -17,18 +17,10 @@ from .models import (
     GraphOut,
     InitSessionIn,
     InitSessionOut,
-    QuizGenerateIn,
-    QuizGenerateOut,
-    QuizGradeIn,
-    QuizGradeOut,
-    ReviewOut,
-    UpdateMasteryIn,
     UpdatePositionIn,
 )
 from .repository import Repository
 from .services.graph_service import GraphService
-from .services.quiz_service import QuizService
-from .services.review_service import ReviewService
 
 config = load_config(Path.cwd())
 init_db(config.db.path)
@@ -48,11 +40,11 @@ if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-def _services() -> tuple[Repository, GraphService, ReviewService, QuizService]:
+def _services() -> tuple[Repository, GraphService]:
     conn = connect(config.db.path)
     repo = Repository(conn)
     llm = LlmClient(config.llm)
-    return repo, GraphService(repo, llm), ReviewService(repo, llm), QuizService(repo, llm)
+    return repo, GraphService(repo, llm)
 
 
 @app.get("/health")
@@ -62,7 +54,7 @@ def health() -> dict[str, str]:
 
 @app.get("/api/sessions")
 def list_sessions(limit: int = 50) -> list[dict]:
-    repo, _, _, _ = _services()
+    repo, _ = _services()
     try:
         return [s.model_dump() for s in repo.list_sessions(limit=limit)]
     finally:
@@ -71,7 +63,7 @@ def list_sessions(limit: int = 50) -> list[dict]:
 
 @app.post("/api/sessions/init", response_model=InitSessionOut)
 def init_session(req: InitSessionIn) -> InitSessionOut:
-    repo, graph_svc, _, _ = _services()
+    repo, graph_svc = _services()
     try:
         session, nodes, edges = graph_svc.init_session(req.topic.strip())
         return InitSessionOut(session=session, nodes=nodes, edges=edges)
@@ -85,15 +77,45 @@ def init_session(req: InitSessionIn) -> InitSessionOut:
 
 @app.post("/api/sessions/init/stream")
 def init_session_stream(req: InitSessionIn) -> StreamingResponse:
-    repo, graph_svc, _, _ = _services()
+    repo, graph_svc = _services()
 
     def event_stream():
         try:
             gen = graph_svc.init_session_stream(req.topic.strip())
             while True:
                 try:
-                    chunk = next(gen)
-                    payload = json.dumps({"type": "token", "content": chunk}, ensure_ascii=False)
+                    event = next(gen)
+                    etype = event.get("type")
+                    if etype == "start":
+                        payload = json.dumps(
+                            {
+                                "type": "start",
+                                "nodes": [n.model_dump() for n in event.get("nodes", [])],
+                                "edges": [e.model_dump() for e in event.get("edges", [])],
+                                "root_node_id": event.get("root_node_id"),
+                            },
+                            ensure_ascii=False,
+                        )
+                    elif etype == "knowledge_start":
+                        node = event.get("node")
+                        edge = event.get("edge")
+                        payload = json.dumps(
+                            {
+                                "type": "knowledge_start",
+                                "node": node.model_dump() if node else None,
+                                "edge": edge.model_dump() if edge else None,
+                            },
+                            ensure_ascii=False,
+                        )
+                    else:
+                        payload = json.dumps(
+                            {
+                                "type": "token",
+                                "node_id": event.get("node_id"),
+                                "content": event.get("content", ""),
+                            },
+                            ensure_ascii=False,
+                        )
                     yield f"data: {payload}\n\n"
                 except StopIteration as stop:
                     session, nodes, edges = stop.value
@@ -112,7 +134,7 @@ def init_session_stream(req: InitSessionIn) -> StreamingResponse:
 
 @app.get("/api/sessions/{session_id}/graph", response_model=GraphOut)
 def get_graph(session_id: str) -> GraphOut:
-    repo, _, _, _ = _services()
+    repo, _ = _services()
     try:
         return GraphOut(nodes=repo.list_nodes(session_id), edges=repo.list_edges(session_id))
     finally:
@@ -121,7 +143,7 @@ def get_graph(session_id: str) -> GraphOut:
 
 @app.post("/api/sessions/{session_id}/ask", response_model=AskOut)
 def ask(session_id: str, req: AskIn) -> AskOut:
-    repo, graph_svc, _, _ = _services()
+    repo, graph_svc = _services()
     try:
         return graph_svc.ask(
             session_id,
@@ -137,7 +159,7 @@ def ask(session_id: str, req: AskIn) -> AskOut:
 
 @app.post("/api/sessions/{session_id}/ask/stream")
 def ask_stream(session_id: str, req: AskIn) -> StreamingResponse:
-    repo, graph_svc, _, _ = _services()
+    repo, graph_svc = _services()
 
     def event_stream():
         try:
@@ -150,7 +172,8 @@ def ask_stream(session_id: str, req: AskIn) -> StreamingResponse:
             while True:
                 try:
                     event = next(gen)
-                    if event.get("type") == "start":
+                    etype = event.get("type")
+                    if etype == "start":
                         payload = json.dumps(
                             {
                                 "type": "start",
@@ -161,8 +184,35 @@ def ask_stream(session_id: str, req: AskIn) -> StreamingResponse:
                             },
                             ensure_ascii=False,
                         )
+                    elif etype == "knowledge_start":
+                        node = event.get("node")
+                        edge = event.get("edge")
+                        payload = json.dumps(
+                            {
+                                "type": "knowledge_start",
+                                "node": node.model_dump() if node else None,
+                                "edge": edge.model_dump() if edge else None,
+                            },
+                            ensure_ascii=False,
+                        )
+                    elif etype == "question_title":
+                        payload = json.dumps(
+                            {
+                                "type": "question_title",
+                                "node_id": event.get("node_id"),
+                                "title": event.get("title", ""),
+                            },
+                            ensure_ascii=False,
+                        )
                     else:
-                        payload = json.dumps({"type": "token", "content": event.get("content", "")}, ensure_ascii=False)
+                        payload = json.dumps(
+                            {
+                                "type": "token",
+                                "node_id": event.get("node_id"),
+                                "content": event.get("content", ""),
+                            },
+                            ensure_ascii=False,
+                        )
                     yield f"data: {payload}\n\n"
                 except StopIteration as stop:
                     result = stop.value
@@ -180,7 +230,7 @@ def ask_stream(session_id: str, req: AskIn) -> StreamingResponse:
 
 @app.patch("/api/sessions/{session_id}/nodes/{node_id}/position")
 def update_position(session_id: str, node_id: str, req: UpdatePositionIn) -> dict[str, bool]:
-    repo, _, _, _ = _services()
+    repo, _ = _services()
     try:
         repo.update_node_position(session_id, node_id, req.x, req.y, req.width)
         return {"ok": True}
@@ -188,19 +238,9 @@ def update_position(session_id: str, node_id: str, req: UpdatePositionIn) -> dic
         repo.conn.close()
 
 
-@app.patch("/api/sessions/{session_id}/nodes/{node_id}/mastery")
-def update_mastery(session_id: str, node_id: str, req: UpdateMasteryIn) -> dict[str, bool]:
-    repo, _, _, _ = _services()
-    try:
-        repo.update_node_mastery(session_id, node_id, req.mastery)
-        return {"ok": True}
-    finally:
-        repo.conn.close()
-
-
 @app.post("/api/sessions/{session_id}/materials")
 async def upload_material(session_id: str, file: UploadFile = File(...)) -> dict[str, str]:
-    repo, _, _, _ = _services()
+    repo, _ = _services()
     try:
         if not file.filename:
             raise HTTPException(status_code=400, detail="Empty filename.")
@@ -219,41 +259,6 @@ async def upload_material(session_id: str, file: UploadFile = File(...)) -> dict
             content_text=text,
         )
         return {"id": material_id}
-    finally:
-        repo.conn.close()
-
-
-@app.post("/api/sessions/{session_id}/review", response_model=ReviewOut)
-def review(session_id: str) -> ReviewOut:
-    repo, _, review_svc, _ = _services()
-    try:
-        return review_svc.generate_review(session_id)
-    except LlmError as exc:
-        raise HTTPException(status_code=503, detail=f"LLM_UNAVAILABLE: {exc}") from exc
-    finally:
-        repo.conn.close()
-
-
-@app.post("/api/sessions/{session_id}/quiz/generate", response_model=QuizGenerateOut)
-def generate_quiz(session_id: str, req: QuizGenerateIn) -> QuizGenerateOut:
-    repo, _, _, quiz_svc = _services()
-    try:
-        return quiz_svc.generate(session_id, req.count)
-    except LlmError as exc:
-        raise HTTPException(status_code=503, detail=f"LLM_UNAVAILABLE: {exc}") from exc
-    finally:
-        repo.conn.close()
-
-
-@app.post("/api/sessions/{session_id}/quiz/grade", response_model=QuizGradeOut)
-def grade_quiz(session_id: str, req: QuizGradeIn) -> QuizGradeOut:
-    repo, _, _, quiz_svc = _services()
-    try:
-        return quiz_svc.grade(session_id, req.quiz_id, req.user_answer)
-    except LlmError as exc:
-        raise HTTPException(status_code=503, detail=f"LLM_UNAVAILABLE: {exc}") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     finally:
         repo.conn.close()
 

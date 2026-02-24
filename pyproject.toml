@@ -22,4 +22,4 @@ graphchat-server = "graphchat.main:run"
 packages = ["graphchat", "graphchat.services"]
 
 [tool.setuptools.package-data]
-graphchat = ["static/**/*"]
+graphchat = ["static/**/*", "config.example.json"]

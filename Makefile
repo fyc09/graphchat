@@ -1,4 +1,4 @@
-.PHONY: py-install web-install web-build web-dev dev run build clean
+.PHONY: py-install py-wheel web-install web-build web-dev dev run build clean
 
 NPM := npm.cmd
 
@@ -14,7 +14,11 @@ web-build:
 web-dev:
 	$(NPM) --prefix graphchat/web run dev
 
-build: py-install web-install web-build
+py-wheel:
+	python -m pip install build
+	python -m build --wheel
+
+build: py-install web-install web-build py-wheel
 
 run:
 	python -m graphchat.main
@@ -23,4 +27,4 @@ dev:
 	python -m uvicorn graphchat.main:app --reload --host 127.0.0.1 --port 8000
 
 clean:
-	python -c "import shutil, pathlib; [shutil.rmtree(p, ignore_errors=True) for p in ['build', 'dist', 'graphchat.egg-info', 'graphchat/static', 'graphchat/data']]"
+	rm -rf build dist graphchat.egg-info graphchat/static graphchat/data

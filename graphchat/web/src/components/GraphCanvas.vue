@@ -13,10 +13,8 @@
         :key="`${edge.id}-${edgeRenderTick}`"
         :d="edgePath(edge)"
         :stroke="edgeColor(edge.edge_type)"
-        :stroke-width="1 + edge.strength * 2"
-        :stroke-dasharray="edge.edge_type === 'counter' ? '6 4' : ''"
+        stroke-width="2"
         fill="none"
-        @click.stop="$emit('edge-click', edge.question)"
       />
       <path
         v-for="edge in draftEdges"
@@ -33,34 +31,80 @@
       v-for="node in nodes"
       :key="node.id"
       class="node"
-      :class="[{ selected: selectedIds.includes(node.id) }, `node-${node.node_type}`]"
+      :class="[{ selected: selectedIds.includes(node.id), 'node-collapsed': isNodeCollapsed(node.id) }, `node-${node.node_type}`]"
       :style="nodeStyle(node)"
+      @pointerdown.capture="onNodePointerDown(node.id)"
     >
       <div class="title-row" :data-node-title-id="node.id" @pointerdown.stop="startNodeDrag($event, node.id)">
-        <div class="check-inline" @click.stop>
-          <input type="checkbox" :checked="selectedIds.includes(node.id)" @change="$emit('toggle-select', node.id)" />
-          <span class="title">{{ node.title }}</span>
+        <div class="title-main">
+          <button
+            class="node-collapse-btn"
+            type="button"
+            :aria-label="isNodeCollapsed(node.id) ? 'Expand node' : 'Collapse node'"
+            @pointerdown.stop
+            @click.stop="toggleNodeCollapsed(node.id)"
+          >
+            <svg viewBox="0 0 10 10" width="10" height="10" :class="{ collapsed: isNodeCollapsed(node.id) }">
+              <path d="M2 1.5 L8 5 L2 8.5 Z" fill="currentColor" />
+            </svg>
+          </button>
+          <div class="check-inline" @click.stop>
+            <input type="checkbox" :checked="selectedIds.includes(node.id)" @change="$emit('toggle-select', node.id)" />
+            <span
+              class="title markdown-inline"
+              :data-math-node-id="node.id"
+              :data-math-section-key="'title'"
+              v-html="renderInlineMarkdown(node.title)"
+            ></span>
+          </div>
         </div>
       </div>
-      <div class="content">
+      <div v-show="!isNodeCollapsed(node.id)" class="content">
         <template v-if="sections(node.content).length > 0">
-          <details v-for="(s, i) in sections(node.content)" :key="`${node.id}-${i}`" open>
+          <details
+            v-for="(s, i) in sections(node.content)"
+            :key="`${node.id}-${i}`"
+            :open="isSectionOpen(sectionKey(node.id, i))"
+            @toggle="onSectionToggle(sectionKey(node.id, i), $event)"
+          >
             <summary class="summary-row" :data-section-key="sectionKey(node.id, i)">
+              <span class="summary-chevron" aria-hidden="true">
+                <svg viewBox="0 0 10 10" width="10" height="10">
+                  <path d="M2 1.5 L8 5 L2 8.5 Z" fill="currentColor" />
+                </svg>
+              </span>
               <input
                 type="checkbox"
                 :checked="selectedSectionKeys.includes(sectionKey(node.id, i))"
                 @click.stop
                 @change="$emit('toggle-section', { nodeId: node.id, title: s.title, body: s.body, key: sectionKey(node.id, i) })"
               />
-              <span class="section-title" :class="{ 'section-selected': selectedSectionKeys.includes(sectionKey(node.id, i)) }">
-                {{ s.title }}
-              </span>
+              <span
+                class="section-title markdown-inline"
+                :class="{ 'section-selected': selectedSectionKeys.includes(sectionKey(node.id, i)) }"
+                :data-math-node-id="node.id"
+                :data-math-section-key="sectionKey(node.id, i)"
+                v-html="renderInlineMarkdown(s.title)"
+              ></span>
             </summary>
-            <div :key="sectionBodyKey(node, i, s.body)" class="section-body markdown-body" v-html="renderMarkdown(s.body)"></div>
+            <div class="section-panel">
+              <div
+                :key="sectionBodyKey(node, i, s.body)"
+                class="section-panel-inner section-body markdown-body"
+                :data-math-node-id="node.id"
+                :data-math-section-key="sectionKey(node.id, i)"
+                v-html="renderMarkdown(s.body)"
+              ></div>
+            </div>
           </details>
         </template>
         <template v-else>
-          <div :key="nodeBodyKey(node)" class="section-body markdown-body" v-html="renderMarkdown(node.content)"></div>
+          <div
+            :key="nodeBodyKey(node)"
+            class="section-body markdown-body"
+            :data-math-node-id="node.id"
+            v-html="renderMarkdown(node.content)"
+          ></div>
         </template>
       </div>
       <div class="resize-edge" @pointerdown.stop="startResize($event, node.id)" />
@@ -107,10 +151,10 @@ import { computed, nextTick, onBeforeUnmount, onMounted, onUpdated, ref } from "
 import DOMPurify from "dompurify";
 import MarkdownIt from "markdown-it";
 import type { EdgeItem, NodeItem } from "../types";
-import { ensureMathJax } from "../mathjax";
+import { ensureMathJax, typesetMathInElements } from "../mathjax";
 
 type DraftQuestion = { x: number; y: number; text: string };
-type RenderEdge = Pick<EdgeItem, "id" | "source_node_id" | "target_node_id" | "source_section_key" | "strength" | "edge_type">;
+type RenderEdge = Pick<EdgeItem, "id" | "source_node_id" | "target_node_id" | "source_section_key" | "edge_type">;
 
 const props = withDefaults(
   defineProps<{
@@ -136,7 +180,6 @@ const emit = defineEmits<{
   (e: "resize-end", payload: { nodeId: string; width: number }): void;
   (e: "toggle-select", nodeId: string): void;
   (e: "toggle-section", payload: { nodeId: string; title: string; body: string; key: string }): void;
-  (e: "edge-click", question: string): void;
   (e: "clear-select"): void;
   (e: "canvas-dblclick", payload: { x: number; y: number }): void;
   (e: "draft-change", value: string): void;
@@ -166,30 +209,51 @@ const panY = ref(320);
 const zCounter = ref(10);
 const nodeZ = ref<Record<string, number>>({});
 const nodeWidth = ref<Record<string, number>>({});
+const nodeCollapsed = ref<Record<string, boolean>>({});
+const sectionOpen = ref<Record<string, boolean>>({});
 const edgeRenderTick = ref(0);
 const contentRenderTick = ref(0);
 let canvasObserver: ResizeObserver | null = null;
 let rerenderRaf: number | null = null;
 let mathRaf: number | null = null;
+let mathTypesetting = false;
+let mathRerunQueued = false;
+const mathSignatureByElement = new WeakMap<Element, string>();
 
 const md = new MarkdownIt({
   html: false,
   linkify: true,
   breaks: true
 });
+const MATH_TYPESET_TIMEOUT_MS = 4000;
+
+function hasMathInText(text: string): boolean {
+  if (!text) return false;
+  return /(^|[^\\])\$\$[\s\S]+?\$\$|(^|[^\\])\$[^\n$]+?\$/.test(text);
+}
+
+async function typesetWithTimeout(element: Element, timeoutMs: number): Promise<void> {
+  const typesetPromise = typesetMathInElements([element]);
+  await Promise.race([
+    typesetPromise,
+    new Promise<never>((_resolve, reject) => {
+      window.setTimeout(() => reject(new Error(`MathJax typeset timeout (${timeoutMs}ms)`)), timeoutMs);
+    })
+  ]);
+}
 
 const draftStyle = computed(() => {
   if (!props.draftQuestion) return {};
   return {
     transform: `translate(${worldToScreenX(props.draftQuestion.x)}px, ${worldToScreenY(props.draftQuestion.y)}px) scale(${scale.value})`,
-    width: "260px",
+    width: "400px",
     zIndex: 9999
   };
 });
 
 const initStyle = computed(() => ({
   transform: `translate(${worldToScreenX(props.initNodePosition.x)}px, ${worldToScreenY(props.initNodePosition.y)}px) scale(${scale.value})`,
-  width: "280px",
+  width: "400px",
   zIndex: 9998
 }));
 
@@ -202,8 +266,7 @@ const draftEdges = computed<RenderEdge[]>(() => {
       source_node_id: nodeId,
       source_section_key: null,
       target_node_id: "draft-question",
-      strength: 0.4,
-      edge_type: "redirect"
+      edge_type: "direct"
     });
   }
   for (const key of props.selectedSectionKeys) {
@@ -214,8 +277,7 @@ const draftEdges = computed<RenderEdge[]>(() => {
       source_node_id: nodeId,
       source_section_key: key,
       target_node_id: "draft-question",
-      strength: 0.4,
-      edge_type: "redirect"
+      edge_type: "direct"
     });
   }
   return out;
@@ -267,16 +329,14 @@ function screenPos(nodeId: string): { x: number; y: number } {
 }
 
 function edgeColor(edgeType: EdgeItem["edge_type"]): string {
-  if (edgeType === "counter") return "#d94141";
-  if (edgeType === "redirect") return "#8f8f8f";
-  if (edgeType === "bridge") return "#156f63";
+  if (edgeType === "direct") return "#2563eb";
   return "#2563eb";
 }
 
 function edgePath(edge: RenderEdge): string {
   const src = sourceAnchor(edge);
   const dst = targetAnchor(edge);
-  const dx = Math.max(40, Math.abs(dst.x - src.x) * 0.35);
+  const dx = 130 * scale.value;
   const c1x = src.x + dx;
   const c1y = src.y;
   const c2x = dst.x - dx;
@@ -299,16 +359,19 @@ function edgeAnchorByElement(selector: string, side: "left" | "right"): { x: num
 
 function sourceAnchor(edge: RenderEdge): { x: number; y: number } {
   if (edge.source_section_key) {
-    const canvas = canvasRef.value;
-    if (canvas) {
-      const el = canvas.querySelector(`[data-section-key="${edge.source_section_key}"]`) as HTMLElement | null;
-      if (el) {
-        const root = canvas.getBoundingClientRect();
-        const y = el.getBoundingClientRect().top - root.top + el.getBoundingClientRect().height / 2;
-        const nodeEl = el.closest(".node") as HTMLElement | null;
-        if (nodeEl) {
-          const nr = nodeEl.getBoundingClientRect();
-          return { x: nr.right - root.left, y };
+    const sourceNodeId = String(edge.source_section_key).split("::")[0] || edge.source_node_id;
+    if (!isNodeCollapsed(sourceNodeId)) {
+      const canvas = canvasRef.value;
+      if (canvas) {
+        const el = canvas.querySelector(`[data-section-key="${edge.source_section_key}"]`) as HTMLElement | null;
+        if (el) {
+          const root = canvas.getBoundingClientRect();
+          const y = el.getBoundingClientRect().top - root.top + el.getBoundingClientRect().height / 2;
+          const nodeEl = el.closest(".node") as HTMLElement | null;
+          if (nodeEl) {
+            const nr = nodeEl.getBoundingClientRect();
+            return { x: nr.right - root.left, y };
+          }
         }
       }
     }
@@ -330,18 +393,16 @@ function targetAnchor(edge: RenderEdge): { x: number; y: number } {
 
 function nodeStyle(node: NodeItem): Record<string, string | number> {
   const width = `${widthOf(node)}px`;
-  const bg = `hsl(${Math.floor(node.mastery * 120)}, 65%, 90%)`;
   const z = nodeZ.value[node.id] ?? 1;
   return {
     transform: `translate(${worldToScreenX(node.x)}px, ${worldToScreenY(node.y)}px) scale(${scale.value})`,
     width,
-    background: bg,
     zIndex: z
   };
 }
 
 function widthOf(node: NodeItem): number {
-  return nodeWidth.value[node.id] ?? node.width ?? (200 + node.importance * 70);
+  return nodeWidth.value[node.id] ?? node.width ?? 400;
 }
 
 function sections(content: string): Array<{ title: string; body: string }> {
@@ -371,6 +432,9 @@ function cleanSectionBody(text: string): string {
 
 function normalizeMathDelimiters(text: string): string {
   let out = text;
+  // Drop empty math placeholders that can appear during streaming and cause KaTeX metrics warnings.
+  out = out.replace(/(^|[^\\])\$\$\s*\$\$/g, (_m, prefix) => prefix as string);
+  out = out.replace(/(^|[^\\])\$\s+\$/g, (_m, prefix) => prefix as string);
   // Only fix explicit malformed forms like `$ $...$ $` / `$$ $$...$$ $$`.
   // Leave valid formulas untouched to avoid introducing parser regressions.
   let prev = "";
@@ -383,7 +447,6 @@ function normalizeMathDelimiters(text: string): string {
       return `${prefix}$$${String(body).trim()}$$`;
     });
   }
-  console.log("Normalized math delimiters:", { before: text, after: out });
   return out;
 }
 
@@ -411,6 +474,32 @@ function renderMarkdown(text: string): string {
   const protectedMath = protectMathSegments(normalized);
   const raw = md.render(protectedMath.content);
   const restored = restoreMathSegments(raw, protectedMath.segments);
+  return DOMPurify.sanitize(restored, {
+    ADD_ATTR: ["style", "aria-hidden"],
+    ADD_TAGS: [
+      "math",
+      "semantics",
+      "mrow",
+      "mi",
+      "mn",
+      "mo",
+      "msup",
+      "msub",
+      "msubsup",
+      "mfrac",
+      "msqrt",
+      "mroot",
+      "mspace",
+      "annotation"
+    ]
+  });
+}
+
+function renderInlineMarkdown(text: string): string {
+  const normalized = normalizeMathDelimiters((text || "").trim());
+  const protectedMath = protectMathSegments(normalized);
+  const raw = md.renderInline(protectedMath.content);
+  const restored = restoreMathSegments(raw, protectedMath.segments);
   return DOMPurify.sanitize(restored);
 }
 
@@ -426,9 +515,35 @@ function sectionKey(nodeId: string, idx: number): string {
   return `${nodeId}::${idx}`;
 }
 
+function isSectionOpen(key: string): boolean {
+  return sectionOpen.value[key] ?? true;
+}
+
+function isNodeCollapsed(nodeId: string): boolean {
+  return nodeCollapsed.value[nodeId] ?? false;
+}
+
+function toggleNodeCollapsed(nodeId: string): void {
+  nodeCollapsed.value[nodeId] = !isNodeCollapsed(nodeId);
+  scheduleCanvasRerender();
+  scheduleMathTypeset();
+}
+
+function onSectionToggle(key: string, event: Event): void {
+  const el = event.currentTarget as HTMLDetailsElement | null;
+  if (!el) return;
+  sectionOpen.value[key] = el.open;
+  scheduleCanvasRerender();
+  scheduleMathTypeset();
+}
+
 function bringToFront(nodeId: string): void {
   zCounter.value += 1;
   nodeZ.value[nodeId] = zCounter.value;
+}
+
+function onNodePointerDown(nodeId: string): void {
+  bringToFront(nodeId);
 }
 
 function updateCanvasSize(): void {
@@ -453,15 +568,38 @@ function scheduleMathTypeset(): void {
     mathRaf = null;
     await nextTick();
     const root = canvasRef.value;
-    const mj = window.MathJax;
-    if (!root || !mj?.typesetPromise) return;
-    const elements = Array.from(root.querySelectorAll(".markdown-body"));
+    if (!root) return;
+    await ensureMathJax();
+    const elements = Array.from(root.querySelectorAll(".markdown-body, .markdown-inline"));
     if (elements.length === 0) return;
+    if (mathTypesetting) {
+      mathRerunQueued = true;
+      return;
+    }
+    mathTypesetting = true;
     try {
-      mj.typesetClear?.(elements);
-      await mj.typesetPromise(elements);
-    } catch {
-      // ignore transient MathJax parse/runtime errors during streaming updates
+      for (const el of elements) {
+        const signature = (el as HTMLElement).innerHTML;
+        const prevSignature = mathSignatureByElement.get(el);
+        const hasMath = hasMathInText((el as HTMLElement).textContent || "");
+        if (prevSignature === signature) continue;
+        if (!hasMath) {
+          mathSignatureByElement.set(el, signature);
+          continue;
+        }
+        try {
+          await typesetWithTimeout(el, MATH_TYPESET_TIMEOUT_MS);
+          mathSignatureByElement.set(el, (el as HTMLElement).innerHTML);
+        } catch {
+          // Ignore malformed/incomplete TeX during streaming updates.
+        }
+      }
+    } finally {
+      mathTypesetting = false;
+      if (mathRerunQueued) {
+        mathRerunQueued = false;
+        scheduleMathTypeset();
+      }
     }
   });
 }
@@ -474,7 +612,6 @@ function startNodeDrag(event: PointerEvent, nodeId: string): void {
   isInteracting.value = true;
   dragMode.value = "node";
   draggingNodeId.value = nodeId;
-  bringToFront(nodeId);
   const rect = canvas.getBoundingClientRect();
   const sx = event.clientX - rect.left;
   const sy = event.clientY - rect.top;
@@ -492,7 +629,6 @@ function startResize(event: PointerEvent, nodeId: string): void {
   if (!node) return;
   isInteracting.value = true;
   resizingNodeId.value = nodeId;
-  bringToFront(nodeId);
   resizeStart.value = {
     x: event.clientX,
     width: widthOf(node)
