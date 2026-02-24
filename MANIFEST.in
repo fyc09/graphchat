@@ -1,2 +1,0 @@
-recursive-include graphchat/static *
-recursive-include graphchat/web *

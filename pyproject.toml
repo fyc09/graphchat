@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "graphchat"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 description = "Dynamic knowledge graph learning assistant"
 requires-python = ">=3.10"
 dependencies = [
