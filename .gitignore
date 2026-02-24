@@ -9,3 +9,6 @@ graphchat/web/node_modules/
 graphchat/static/
 *.db
 *.egg-info/
+build/
+dist/
+TEMP_*.md
