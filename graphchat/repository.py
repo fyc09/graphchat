@@ -34,7 +34,7 @@ class Repository:
 
     def list_nodes(self, session_id: str) -> list[Node]:
         rows = self.conn.execute(
-            "SELECT * FROM nodes WHERE session_id = ? ORDER BY created_at ASC", (session_id,)
+            "SELECT * FROM nodes WHERE session_id = ? AND deleted_at IS NULL ORDER BY created_at ASC", (session_id,)
         ).fetchall()
         out: list[Node] = []
         for r in rows:
@@ -46,7 +46,17 @@ class Repository:
 
     def list_edges(self, session_id: str) -> list[Edge]:
         rows = self.conn.execute(
-            "SELECT * FROM edges WHERE session_id = ? ORDER BY created_at ASC", (session_id,)
+            """
+            SELECT e.*
+            FROM edges e
+            JOIN nodes src ON src.id = e.source_node_id
+            JOIN nodes dst ON dst.id = e.target_node_id
+            WHERE e.session_id = ?
+              AND src.deleted_at IS NULL
+              AND dst.deleted_at IS NULL
+            ORDER BY e.created_at ASC
+            """,
+            (session_id,),
         ).fetchall()
         return [Edge(**dict(r)) for r in rows]
 
@@ -145,7 +155,7 @@ class Repository:
             return []
         placeholders = ",".join("?" for _ in node_ids)
         rows = self.conn.execute(
-            f"SELECT * FROM nodes WHERE session_id = ? AND id IN ({placeholders})",
+            f"SELECT * FROM nodes WHERE session_id = ? AND deleted_at IS NULL AND id IN ({placeholders})",
             (session_id, *node_ids),
         ).fetchall()
         out: list[Node] = []
@@ -159,20 +169,27 @@ class Repository:
     def update_node_position(self, session_id: str, node_id: str, x: float, y: float, width: float | None = None) -> None:
         if width is None:
             self.conn.execute(
-                "UPDATE nodes SET x = ?, y = ? WHERE session_id = ? AND id = ?",
+                "UPDATE nodes SET x = ?, y = ? WHERE session_id = ? AND id = ? AND deleted_at IS NULL",
                 (x, y, session_id, node_id),
             )
         else:
             self.conn.execute(
-                "UPDATE nodes SET x = ?, y = ?, width = ? WHERE session_id = ? AND id = ?",
+                "UPDATE nodes SET x = ?, y = ?, width = ? WHERE session_id = ? AND id = ? AND deleted_at IS NULL",
                 (x, y, width, session_id, node_id),
             )
         self.conn.commit()
 
     def update_node_content(self, session_id: str, node_id: str, title: str, content: str) -> None:
         self.conn.execute(
-            "UPDATE nodes SET title = ?, content = ? WHERE session_id = ? AND id = ?",
+            "UPDATE nodes SET title = ?, content = ? WHERE session_id = ? AND id = ? AND deleted_at IS NULL",
             (title, content, session_id, node_id),
+        )
+        self.conn.commit()
+
+    def soft_delete_node(self, session_id: str, node_id: str) -> None:
+        self.conn.execute(
+            "UPDATE nodes SET deleted_at = ? WHERE session_id = ? AND id = ? AND deleted_at IS NULL",
+            (_now_iso(), session_id, node_id),
         )
         self.conn.commit()
 

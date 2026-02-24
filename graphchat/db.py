@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   y REAL NOT NULL,
   width REAL NOT NULL DEFAULT 400,
   node_type TEXT NOT NULL,
+  deleted_at TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -64,6 +65,10 @@ def init_db(db_path: str) -> None:
             pass
         try:
             conn.execute("ALTER TABLE nodes ADD COLUMN width REAL")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE nodes ADD COLUMN deleted_at TEXT")
         except sqlite3.OperationalError:
             pass
         conn.execute("UPDATE nodes SET width = 400 WHERE width IS NULL OR width <= 0")

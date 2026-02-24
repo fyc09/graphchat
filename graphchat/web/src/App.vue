@@ -14,6 +14,9 @@
         <label>Upload Reference (txt/md)</label>
         <input type="file" @change="onFileChange" />
       </div>
+      <div v-if="hiddenRootIds.length > 0" class="section">
+        <button @click="resetHiddenNodes">Show Hidden Nodes ({{ hiddenRootIds.length }})</button>
+      </div>
       <div v-if="redirectHint" class="section result">
         <h3>Redirect</h3>
         <p>{{ redirectHint }}</p>
@@ -22,10 +25,11 @@
     </aside>
     <main class="graph-wrap">
       <GraphCanvas
-        :nodes="graph.nodes"
-        :edges="graph.edges"
-        :selected-ids="selectedNodeIds"
-        :selected-section-keys="selectedSectionKeys"
+        :nodes="visibleNodes"
+        :edges="visibleEdges"
+        :child-controls="childControls"
+        :selected-ids="visibleSelectedNodeIds"
+        :selected-section-keys="visibleSelectedSectionKeys"
         :draft-question="draftQuestion"
         :show-init-node="graph.nodes.length === 0 && !draftQuestion"
         :init-topic="initTopic"
@@ -43,19 +47,23 @@
         @init-topic-change="onInitTopicChange"
         @init-node-move="onInitNodeMove"
         @init-submit="onInitSession"
+        @delete-node="onDeleteNode"
+        @hide-node="onHideNode"
+        @toggle-child-hidden="onToggleChildHidden"
       />
     </main>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import GraphCanvas from "./components/GraphCanvas.vue";
 import {
   askQuestionStream,
   getGraph,
   initSessionStream,
   listSessions,
+  softDeleteNode,
   updateNodePosition,
   uploadMaterial
 } from "./api";
@@ -74,7 +82,90 @@ const initNodePosition = ref<{ x: number; y: number }>({ x: 0, y: 0 });
 const redirectHint = ref("");
 const errorText = ref("");
 const isLoading = ref(false);
+const hiddenRootIds = ref<string[]>([]);
 const graph = reactive<{ nodes: NodeItem[]; edges: EdgeItem[] }>({ nodes: [], edges: [] });
+
+const hiddenNodeIdSet = computed<Set<string>>(() => {
+  if (hiddenRootIds.value.length === 0) return new Set<string>();
+  const nodeIds = new Set(graph.nodes.map((node) => node.id));
+  const childrenByNode = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (!childrenByNode.has(edge.source_node_id)) childrenByNode.set(edge.source_node_id, []);
+    childrenByNode.get(edge.source_node_id)?.push(edge.target_node_id);
+  }
+  const out = new Set<string>();
+  const queue = hiddenRootIds.value.filter((nodeId) => nodeIds.has(nodeId));
+  while (queue.length > 0) {
+    const nodeId = queue.shift() as string;
+    if (out.has(nodeId)) continue;
+    out.add(nodeId);
+    for (const nextId of childrenByNode.get(nodeId) ?? []) {
+      if (!out.has(nextId)) queue.push(nextId);
+    }
+  }
+  return out;
+});
+
+const visibleNodes = computed<NodeItem[]>(() =>
+  graph.nodes.filter((node) => !hiddenNodeIdSet.value.has(node.id))
+);
+
+const visibleEdges = computed<EdgeItem[]>(() =>
+  graph.edges.filter(
+    (edge) => !hiddenNodeIdSet.value.has(edge.source_node_id) && !hiddenNodeIdSet.value.has(edge.target_node_id)
+  )
+);
+
+const visibleNodeIdSet = computed<Set<string>>(() => new Set(visibleNodes.value.map((node) => node.id)));
+
+const visibleSelectedNodeIds = computed<string[]>(() =>
+  selectedNodeIds.value.filter((nodeId) => visibleNodeIdSet.value.has(nodeId))
+);
+
+const visibleSelectedSectionKeys = computed<string[]>(() =>
+  selectedSectionKeys.value.filter((key) => visibleNodeIdSet.value.has(key.split("::")[0] || ""))
+);
+
+const childControls = computed<
+  Array<{
+    parentNodeId: string;
+    children: Array<{ id: string; title: string; node_type: NodeItem["node_type"]; hidden: boolean }>;
+  }>
+>(() => {
+  const hiddenSet = hiddenNodeIdSet.value;
+  const edgesBySource = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (!edgesBySource.has(edge.source_node_id)) edgesBySource.set(edge.source_node_id, []);
+    edgesBySource.get(edge.source_node_id)?.push(edge.target_node_id);
+  }
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const out: Array<{
+    parentNodeId: string;
+    children: Array<{ id: string; title: string; node_type: NodeItem["node_type"]; hidden: boolean }>;
+  }> = [];
+  for (const node of visibleNodes.value) {
+    const targetIds = Array.from(new Set(edgesBySource.get(node.id) ?? []));
+    if (targetIds.length === 0) continue;
+    const children = targetIds
+      .map((id) => {
+        const child = nodeById.get(id);
+        if (!child) return null;
+        return {
+          id,
+          title: child.title,
+          node_type: child.node_type,
+          hidden: hiddenSet.has(id)
+        };
+      })
+      .filter((item): item is { id: string; title: string; node_type: NodeItem["node_type"]; hidden: boolean } => !!item);
+    if (children.length === 0) continue;
+    out.push({
+      parentNodeId: node.id,
+      children
+    });
+  }
+  return out;
+});
 
 onMounted(async () => {
   await refreshSessions();
@@ -96,6 +187,7 @@ async function onSwitchSession(): Promise<void> {
     const data = await getGraph(sessionId.value);
     graph.nodes = data.nodes;
     graph.edges = data.edges;
+    hiddenRootIds.value = [];
     clearSelections();
   } catch (err) {
     errorText.value = String(err);
@@ -111,6 +203,7 @@ function onNewSession(): void {
   draftQuestion.value = null;
   initTopic.value = "";
   initNodePosition.value = { x: 0, y: 0 };
+  hiddenRootIds.value = [];
   clearSelections();
 }
 
@@ -178,6 +271,7 @@ async function onInitSession(): Promise<void> {
       if (edgesToAdd.length > 0) graph.edges = [...graph.edges, ...edgesToAdd];
     }
     clearSelections();
+    hiddenRootIds.value = [];
     initTopic.value = "";
     await refreshSessions();
   } catch (err) {
@@ -344,6 +438,79 @@ function clearSelections(): void {
   selectedNodeIds.value = [];
   selectedSections.value = [];
   selectedSectionKeys.value = [];
+}
+
+function resetHiddenNodes(): void {
+  hiddenRootIds.value = [];
+}
+
+function onHideNode(nodeId: string): void {
+  if (!hiddenRootIds.value.includes(nodeId)) {
+    hiddenRootIds.value = [...hiddenRootIds.value, nodeId];
+  }
+  clearSelections();
+}
+
+function onRestoreHiddenNode(nodeId: string): void {
+  if (!nodeId) return;
+  if (hiddenRootIds.value.includes(nodeId)) {
+    hiddenRootIds.value = hiddenRootIds.value.filter((id) => id !== nodeId);
+    return;
+  }
+  const edgesBySource = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (!edgesBySource.has(edge.source_node_id)) edgesBySource.set(edge.source_node_id, []);
+    edgesBySource.get(edge.source_node_id)?.push(edge.target_node_id);
+  }
+  const rootsToShow = new Set<string>();
+  for (const rootId of hiddenRootIds.value) {
+    const queue = [rootId];
+    const visited = new Set<string>();
+    while (queue.length > 0) {
+      const nextId = queue.shift() as string;
+      if (visited.has(nextId)) continue;
+      visited.add(nextId);
+      if (nextId === nodeId) {
+        rootsToShow.add(rootId);
+        break;
+      }
+      for (const childId of edgesBySource.get(nextId) ?? []) {
+        if (!visited.has(childId)) queue.push(childId);
+      }
+    }
+  }
+  if (rootsToShow.size === 0) return;
+  hiddenRootIds.value = hiddenRootIds.value.filter((id) => !rootsToShow.has(id));
+}
+
+function onToggleChildHidden(payload: { childNodeId: string; hidden: boolean }): void {
+  if (!payload.childNodeId) return;
+  if (payload.hidden) {
+    if (!hiddenRootIds.value.includes(payload.childNodeId)) {
+      hiddenRootIds.value = [...hiddenRootIds.value, payload.childNodeId];
+    }
+    return;
+  }
+  onRestoreHiddenNode(payload.childNodeId);
+}
+
+async function onDeleteNode(nodeId: string): Promise<void> {
+  if (!sessionId.value) return;
+  try {
+    errorText.value = "";
+    await softDeleteNode(sessionId.value, nodeId);
+    const deleted = new Set<string>([nodeId]);
+    graph.nodes = graph.nodes.filter((node) => !deleted.has(node.id));
+    graph.edges = graph.edges.filter(
+      (edge) => !deleted.has(edge.source_node_id) && !deleted.has(edge.target_node_id)
+    );
+    hiddenRootIds.value = hiddenRootIds.value.filter((id) => id !== nodeId);
+    selectedNodeIds.value = selectedNodeIds.value.filter((id) => id !== nodeId);
+    selectedSections.value = selectedSections.value.filter((s) => s.node_id !== nodeId);
+    selectedSectionKeys.value = selectedSectionKeys.value.filter((key) => (key.split("::")[0] || "") !== nodeId);
+  } catch (err) {
+    errorText.value = String(err);
+  }
 }
 
 async function onMoveEnd(payload: { nodeId: string; x: number; y: number }): Promise<void> {

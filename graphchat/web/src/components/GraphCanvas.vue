@@ -58,6 +58,109 @@
             ></span>
           </div>
         </div>
+        <div class="node-actions" @pointerdown.stop @click.stop>
+          <button
+            class="node-action-btn danger"
+            type="button"
+            title="Delete node"
+            aria-label="Delete node"
+            @click.stop="$emit('delete-node', node.id)"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <path
+                d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v8h-2V9zm4 0h2v8h-2V9zM7 9h2v8H7V9zm-1 12h12l1-12H5l1 12z"
+                fill="currentColor"
+              />
+            </svg>
+          </button>
+          <button
+            class="node-action-btn"
+            type="button"
+            title="Hide subtree"
+            aria-label="Hide subtree"
+            @click.stop="$emit('hide-node', node.id)"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <path
+                d="M12 5c5.5 0 9.5 4.7 10.7 6.4.4.5.4 1.2 0 1.7C21.5 14.8 17.5 19.5 12 19.5S2.5 14.8 1.3 13.1a1.4 1.4 0 010-1.7C2.5 9.7 6.5 5 12 5zm0 2C7.8 7 4.5 10.5 3.3 12c1.2 1.5 4.5 5 8.7 5s7.5-3.5 8.7-5C19.5 10.5 16.2 7 12 7zm0 2.5A2.5 2.5 0 1112 14a2.5 2.5 0 010-5z"
+                fill="currentColor"
+              />
+            </svg>
+          </button>
+          <button
+            class="node-action-btn"
+            type="button"
+            title="Manage child visibility"
+            aria-label="Manage child visibility"
+            @click.stop="toggleChildMenu(node.id, 'all')"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+              <path d="M4 5h16v2H4V5zm0 6h10v2H4v-2zm0 6h16v2H4v-2z" fill="currentColor" />
+            </svg>
+          </button>
+          <div
+            v-if="openChildMenuNodeId === node.id && openChildMenuMode === 'all'"
+            class="child-manager"
+            @pointerdown.stop
+            @click.stop
+            @wheel.stop
+          >
+            <div class="child-manager-list">
+              <button
+                v-for="child in menuChildrenOf(node.id)"
+                :key="child.id"
+                type="button"
+                class="child-toggle"
+                :class="[child.hidden ? 'hidden' : 'visible', `node-${child.node_type}`]"
+                :title="child.hidden ? `Show ${child.title}` : `Hide ${child.title}`"
+                @click.stop="$emit('toggle-child-hidden', { childNodeId: child.id, hidden: !child.hidden })"
+              >
+                {{ child.title }}
+              </button>
+              <div v-if="menuChildrenOf(node.id).length === 0" class="child-manager-empty">No children</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div v-if="hasHiddenChildren(node.id)" class="hidden-child-indicator" @pointerdown.stop @click.stop>
+        <svg viewBox="0 0 18 10" width="18" height="10" aria-hidden="true" class="hidden-child-line">
+          <line x1="1" y1="5" x2="17" y2="5" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 2" />
+        </svg>
+        <button
+          class="node-action-btn hidden-child-btn"
+          type="button"
+          title="Manage hidden children"
+          aria-label="Manage hidden children"
+          @click.stop="toggleChildMenu(node.id, 'hidden')"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+            <circle cx="6" cy="12" r="1.8" fill="currentColor" />
+            <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+            <circle cx="18" cy="12" r="1.8" fill="currentColor" />
+          </svg>
+        </button>
+        <div
+          v-if="openChildMenuNodeId === node.id && openChildMenuMode === 'hidden'"
+          class="child-manager"
+          @pointerdown.stop
+          @click.stop
+          @wheel.stop
+        >
+          <div class="child-manager-list">
+            <button
+              v-for="child in menuChildrenOf(node.id)"
+              :key="child.id"
+              type="button"
+              class="child-toggle"
+              :class="[child.hidden ? 'hidden' : 'visible', `node-${child.node_type}`]"
+              :title="child.hidden ? `Show ${child.title}` : `Hide ${child.title}`"
+              @click.stop="$emit('toggle-child-hidden', { childNodeId: child.id, hidden: !child.hidden })"
+            >
+              {{ child.title }}
+            </button>
+            <div v-if="menuChildrenOf(node.id).length === 0" class="child-manager-empty">No children</div>
+          </div>
+        </div>
       </div>
       <div v-show="!isNodeCollapsed(node.id)" class="content">
         <template v-if="sections(node.content).length > 0">
@@ -155,11 +258,16 @@ import { ensureMathJax, typesetMathInElements } from "../mathjax";
 
 type DraftQuestion = { x: number; y: number; text: string };
 type RenderEdge = Pick<EdgeItem, "id" | "source_node_id" | "target_node_id" | "source_section_key" | "edge_type">;
+type ChildControl = {
+  parentNodeId: string;
+  children: Array<{ id: string; title: string; node_type: NodeItem["node_type"]; hidden: boolean }>;
+};
 
 const props = withDefaults(
   defineProps<{
     nodes: NodeItem[];
     edges: EdgeItem[];
+    childControls: ChildControl[];
     selectedIds: string[];
     selectedSectionKeys: string[];
     draftQuestion?: DraftQuestion | null;
@@ -171,7 +279,8 @@ const props = withDefaults(
     draftQuestion: null,
     showInitNode: false,
     initTopic: "",
-    initNodePosition: () => ({ x: 0, y: 0 })
+    initNodePosition: () => ({ x: 0, y: 0 }),
+    childControls: () => []
   }
 );
 
@@ -189,6 +298,9 @@ const emit = defineEmits<{
   (e: "init-topic-change", value: string): void;
   (e: "init-node-move", payload: { x: number; y: number }): void;
   (e: "init-submit"): void;
+  (e: "delete-node", nodeId: string): void;
+  (e: "hide-node", nodeId: string): void;
+  (e: "toggle-child-hidden", payload: { childNodeId: string; hidden: boolean }): void;
 }>();
 
 const canvasRef = ref<HTMLDivElement | null>(null);
@@ -213,6 +325,8 @@ const nodeCollapsed = ref<Record<string, boolean>>({});
 const sectionOpen = ref<Record<string, boolean>>({});
 const edgeRenderTick = ref(0);
 const contentRenderTick = ref(0);
+const openChildMenuNodeId = ref<string | null>(null);
+const openChildMenuMode = ref<"all" | "hidden">("all");
 let canvasObserver: ResizeObserver | null = null;
 let rerenderRaf: number | null = null;
 let mathRaf: number | null = null;
@@ -450,6 +564,32 @@ function normalizeMathDelimiters(text: string): string {
   return out;
 }
 
+function childrenOf(parentNodeId: string): Array<{ id: string; title: string; node_type: NodeItem["node_type"]; hidden: boolean }> {
+  return props.childControls.find((it) => it.parentNodeId === parentNodeId)?.children ?? [];
+}
+
+function hiddenChildrenOf(parentNodeId: string): Array<{ id: string; title: string; node_type: NodeItem["node_type"]; hidden: boolean }> {
+  return childrenOf(parentNodeId).filter((child) => child.hidden);
+}
+
+function hasHiddenChildren(parentNodeId: string): boolean {
+  return hiddenChildrenOf(parentNodeId).length > 0;
+}
+
+function menuChildrenOf(parentNodeId: string): Array<{ id: string; title: string; node_type: NodeItem["node_type"]; hidden: boolean }> {
+  if (openChildMenuMode.value === "hidden") return hiddenChildrenOf(parentNodeId);
+  return childrenOf(parentNodeId);
+}
+
+function toggleChildMenu(parentNodeId: string, mode: "all" | "hidden"): void {
+  if (openChildMenuNodeId.value === parentNodeId && openChildMenuMode.value === mode) {
+    openChildMenuNodeId.value = null;
+    return;
+  }
+  openChildMenuNodeId.value = parentNodeId;
+  openChildMenuMode.value = mode;
+}
+
 function protectMathSegments(text: string): { content: string; segments: string[] } {
   const segments: string[] = [];
   const content = text.replace(/(\\)?\$\$([\s\S]+?)\$\$|(\\)?\$([^\n$]+?)\$/g, (m, esc1, _b1, esc2) => {
@@ -673,6 +813,7 @@ function startInitDrag(event: PointerEvent): void {
 }
 
 function onCanvasPointerDown(event: PointerEvent): void {
+  openChildMenuNodeId.value = null;
   const target = event.target as HTMLElement;
   if (target.closest(".node")) return;
   event.preventDefault();

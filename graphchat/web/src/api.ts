@@ -179,6 +179,12 @@ export async function updateNodePosition(
   });
 }
 
+export async function softDeleteNode(sessionId: string, nodeId: string): Promise<void> {
+  await http(`/api/sessions/${sessionId}/nodes/${nodeId}`, {
+    method: "DELETE"
+  });
+}
+
 export async function uploadMaterial(sessionId: string, file: File): Promise<void> {
   const form = new FormData();
   form.append("file", file);

@@ -238,6 +238,16 @@ def update_position(session_id: str, node_id: str, req: UpdatePositionIn) -> dic
         repo.conn.close()
 
 
+@app.delete("/api/sessions/{session_id}/nodes/{node_id}")
+def delete_node(session_id: str, node_id: str) -> dict[str, bool]:
+    repo, _ = _services()
+    try:
+        repo.soft_delete_node(session_id, node_id)
+        return {"ok": True}
+    finally:
+        repo.conn.close()
+
+
 @app.post("/api/sessions/{session_id}/materials")
 async def upload_material(session_id: str, file: UploadFile = File(...)) -> dict[str, str]:
     repo, _ = _services()
